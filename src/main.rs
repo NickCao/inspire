@@ -1,5 +1,4 @@
 use argh::FromArgs;
-use std::io::Write;
 use tokio::net::UnixListener;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::wrappers::UnixListenerStream;
@@ -62,6 +61,7 @@ impl Default for Inspire {
         let usage = usage.build().unwrap();
         builder.append_extension(usage).unwrap();
         let mut basic = openssl::x509::extension::BasicConstraints::new();
+        basic.critical();
         basic.ca();
         let basic = basic.build().unwrap();
         builder.append_extension(basic).unwrap();
@@ -134,7 +134,9 @@ impl SpiffeWorkloadApi for Inspire {
             let mut san = openssl::x509::extension::SubjectAlternativeName::new();
             san.critical();
             san.uri(&spiffe_id);
-            let san = san.build(&builder.x509v3_context(None, None)).unwrap();
+            let san = san
+                .build(&builder.x509v3_context(Some(&self.ca), None))
+                .unwrap();
             builder.append_extension(san).unwrap();
             let mut usage = openssl::x509::extension::KeyUsage::new();
             usage.critical();
@@ -148,6 +150,7 @@ impl SpiffeWorkloadApi for Inspire {
             let ext_usage = ext_usage.build().unwrap();
             builder.append_extension(ext_usage).unwrap();
             let mut basic = openssl::x509::extension::BasicConstraints::new();
+            basic.critical();
             let basic = basic.build().unwrap();
             builder.append_extension(basic).unwrap();
             let identifier = openssl::x509::extension::SubjectKeyIdentifier::new();
@@ -155,6 +158,14 @@ impl SpiffeWorkloadApi for Inspire {
                 .build(&builder.x509v3_context(None, None))
                 .unwrap();
             builder.append_extension(identifier).unwrap();
+
+            let mut auth_identifier = openssl::x509::extension::AuthorityKeyIdentifier::new();
+            auth_identifier.keyid(true);
+            let auth_identifier = auth_identifier
+                .build(&builder.x509v3_context(Some(&self.ca), None))
+                .unwrap();
+            builder.append_extension(auth_identifier).unwrap();
+
             builder
                 .sign(&self.pkey, openssl::hash::MessageDigest::null())
                 .unwrap();
