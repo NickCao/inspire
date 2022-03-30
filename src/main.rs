@@ -72,7 +72,7 @@ impl Inspire {
         let ca = builder.build();
         Ok(Self { ca, pkey })
     }
-    fn issue(&self, spiffe_id: &str) -> Result<(X509, PKey<Private>), ErrorStack> {
+    fn issue(&self, spiffe_id: &str) -> Result<X509svid, ErrorStack> {
         let pkey = PKey::generate_ed25519()?;
         let mut builder = X509::builder()?;
         builder.set_version(2)?;
@@ -119,7 +119,13 @@ impl Inspire {
         builder.append_extension(auth_identifier)?;
         builder.sign(&self.pkey, MessageDigest::null())?;
         let cert = builder.build();
-        Ok((cert, pkey))
+        Ok(X509svid {
+            spiffe_id: spiffe_id.to_owned(),
+            x509_svid: cert.to_der()?,
+            x509_svid_key: pkey.private_key_to_der()?,
+            bundle: self.ca.to_der()?,
+            hint: "local".to_owned(),
+        })
     }
 }
 
@@ -153,14 +159,8 @@ impl SpiffeWorkloadApi for Inspire {
                 .join(cgroup.pathname.strip_prefix("/").unwrap())
                 .unwrap()
                 .into();
-            let (cert, pkey) = self.issue(&spiffe_id).unwrap();
-            svids.push(X509svid {
-                spiffe_id: spiffe_id.clone(),
-                x509_svid: cert.to_der().unwrap(),
-                x509_svid_key: pkey.private_key_to_der().unwrap(),
-                bundle: self.ca.to_der().unwrap(),
-                hint: "local".to_string(),
-            });
+            let svid = self.issue(&spiffe_id).unwrap();
+            svids.push(svid);
         }
 
         let (tx, rx) = tokio::sync::mpsc::channel(1);
