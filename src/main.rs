@@ -1,6 +1,6 @@
 use argh::FromArgs;
-use openssl::x509::extension::*;
 use openssl::asn1::*;
+use openssl::x509::extension::*;
 use tokio::net::UnixListener;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::wrappers::UnixListenerStream;
@@ -26,56 +26,45 @@ struct Inspire {
     pkey: openssl::pkey::PKey<openssl::pkey::Private>,
 }
 
-impl Default for Inspire {
-    fn default() -> Self {
-        let pkey = openssl::pkey::PKey::generate_ed25519().unwrap();
-        let mut builder = openssl::x509::X509::builder().unwrap();
-        builder.set_version(2).unwrap();
-        let mut name = openssl::x509::X509Name::builder().unwrap();
-        name.append_entry_by_text("O", "SPIFFE").unwrap();
-        name.append_entry_by_text("CN", "ca").unwrap();
+impl Inspire {
+    fn new() -> Result<Self, openssl::error::ErrorStack> {
+        let pkey = openssl::pkey::PKey::generate_ed25519()?;
+        let mut builder = openssl::x509::X509::builder()?;
+        builder.set_version(2)?;
+        let mut name = openssl::x509::X509Name::builder()?;
+        name.append_entry_by_text("O", "SPIFFE")?;
+        name.append_entry_by_text("CN", "ca")?;
         let name = name.build();
-        builder.set_issuer_name(&name).unwrap();
-        builder.set_subject_name(&name).unwrap();
-        let mut bn = openssl::bn::BigNum::new().unwrap();
-        bn.rand(127, openssl::bn::MsbOption::MAYBE_ZERO, false)
-            .unwrap();
-        builder
-            .set_serial_number(&Asn1Integer::from_bn(&bn).unwrap())
-            .unwrap();
-        builder
-            .set_not_before(&Asn1Time::days_from_now(0).unwrap())
-            .unwrap();
-        builder
-            .set_not_after(&Asn1Time::days_from_now(1).unwrap())
-            .unwrap();
-        builder.set_pubkey(&pkey).unwrap();
+        builder.set_issuer_name(&name)?;
+        builder.set_subject_name(&name)?;
+        let mut bn = openssl::bn::BigNum::new()?;
+        bn.rand(127, openssl::bn::MsbOption::MAYBE_ZERO, false)?;
+        builder.set_serial_number(&Asn1Integer::from_bn(&bn).unwrap())?;
+        builder.set_not_before(&Asn1Time::days_from_now(0).unwrap())?;
+        builder.set_not_after(&Asn1Time::days_from_now(1).unwrap())?;
+        builder.set_pubkey(&pkey)?;
         let mut san = SubjectAlternativeName::new();
         san.critical();
         san.uri("spiffe://localhost");
-        let san = san.build(&builder.x509v3_context(None, None)).unwrap();
-        builder.append_extension(san).unwrap();
+        let san = san.build(&builder.x509v3_context(None, None))?;
+        builder.append_extension(san)?;
         let mut usage = KeyUsage::new();
         usage.critical();
         usage.key_cert_sign();
         usage.crl_sign();
-        let usage = usage.build().unwrap();
-        builder.append_extension(usage).unwrap();
+        let usage = usage.build()?;
+        builder.append_extension(usage)?;
         let mut basic = BasicConstraints::new();
         basic.critical();
         basic.ca();
-        let basic = basic.build().unwrap();
-        builder.append_extension(basic).unwrap();
+        let basic = basic.build()?;
+        builder.append_extension(basic)?;
         let identifier = SubjectKeyIdentifier::new();
-        let identifier = identifier
-            .build(&builder.x509v3_context(None, None))
-            .unwrap();
-        builder.append_extension(identifier).unwrap();
-        builder
-            .sign(&pkey, openssl::hash::MessageDigest::null())
-            .unwrap();
+        let identifier = identifier.build(&builder.x509v3_context(None, None))?;
+        builder.append_extension(identifier)?;
+        builder.sign(&pkey, openssl::hash::MessageDigest::null())?;
         let ca = builder.build();
-        Self { ca, pkey }
+        Ok(Self { ca, pkey })
     }
 }
 
@@ -225,7 +214,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     drop(std::fs::remove_file(&args.listen));
     let uds = UnixListener::bind(&args.listen)?;
     let uds_stream = UnixListenerStream::new(uds);
-    let inspire = Inspire::default();
+    let inspire = Inspire::new().unwrap();
     Server::builder()
         .add_service(SpiffeWorkloadApiServer::new(inspire))
         .serve_with_incoming(uds_stream)
