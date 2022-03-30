@@ -40,30 +40,36 @@ impl SpiffeWorkloadApi for Inspire {
         let cred = conn_info
             .peer_cred
             .ok_or(Status::aborted("failed to get peer cred"))?;
-        println!("{:?}", cred);
         let (tx, rx) = tokio::sync::mpsc::channel(1);
-        let spiffe_id = "spiffe://example.com/foo".to_string();
+        let proc = procfs::process::Process::new(cred.pid().unwrap()).unwrap();
+        let cgroups = proc.cgroups().unwrap();
         let ca_der = self.ca.serialize_der().unwrap();
-        let mut params = rcgen::CertificateParams::default();
-        params.alg = &rcgen::PKCS_ED25519;
-        params
-            .subject_alt_names
-            .push(rcgen::SanType::URI(spiffe_id.clone()));
-        let cert = rcgen::Certificate::from_params(params).unwrap();
-        let der = cert.serialize_der_with_signer(&self.ca).unwrap();
+        let mut svids = vec![];
+        for cgroup in cgroups {
+            let trust_domain = url::Url::parse("spiffe://localhost").unwrap();
+            let spiffe_id: String = trust_domain.join(&cgroup.pathname).unwrap().into();
+            let mut params = rcgen::CertificateParams::default();
+            params.alg = &rcgen::PKCS_ED25519;
+            params
+                .subject_alt_names
+                .push(rcgen::SanType::URI(spiffe_id.clone()));
+            let cert = rcgen::Certificate::from_params(params).unwrap();
+            let der = cert.serialize_der_with_signer(&self.ca).unwrap();
+            svids.push(X509svid {
+                spiffe_id: spiffe_id.clone(),
+                x509_svid: der.clone(),
+                x509_svid_key: cert.serialize_private_key_der(),
+                bundle: ca_der.clone(),
+                hint: "local".to_string(),
+            });
+        }
         tokio::spawn(async move {
             loop {
                 if let Err(_) = tx
                     .send(Ok(X509svidResponse {
                         crl: vec![],
                         federated_bundles: std::collections::HashMap::new(),
-                        svids: vec![X509svid {
-                            spiffe_id: spiffe_id.clone(),
-                            x509_svid: der.clone(),
-                            x509_svid_key: cert.serialize_private_key_der(),
-                            bundle: ca_der.clone(),
-                            hint: "local".to_string(),
-                        }],
+                        svids: svids.clone(),
                     }))
                     .await
                 {
