@@ -1,6 +1,9 @@
 use argh::FromArgs;
 use openssl::asn1::*;
+use openssl::bn::*;
+use openssl::hash::*;
 use openssl::x509::extension::*;
+use openssl::x509::*;
 use tokio::net::UnixListener;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::wrappers::UnixListenerStream;
@@ -22,23 +25,23 @@ struct Args {
 }
 
 struct Inspire {
-    ca: openssl::x509::X509,
+    ca: X509,
     pkey: openssl::pkey::PKey<openssl::pkey::Private>,
 }
 
 impl Inspire {
     fn new() -> Result<Self, openssl::error::ErrorStack> {
         let pkey = openssl::pkey::PKey::generate_ed25519()?;
-        let mut builder = openssl::x509::X509::builder()?;
+        let mut builder = X509::builder()?;
         builder.set_version(2)?;
-        let mut name = openssl::x509::X509Name::builder()?;
+        let mut name = X509Name::builder()?;
         name.append_entry_by_text("O", "SPIFFE")?;
         name.append_entry_by_text("CN", "ca")?;
         let name = name.build();
         builder.set_issuer_name(&name)?;
         builder.set_subject_name(&name)?;
-        let mut bn = openssl::bn::BigNum::new()?;
-        bn.rand(127, openssl::bn::MsbOption::MAYBE_ZERO, false)?;
+        let mut bn = BigNum::new()?;
+        bn.rand(127, MsbOption::MAYBE_ZERO, false)?;
         builder.set_serial_number(&Asn1Integer::from_bn(&bn).unwrap())?;
         builder.set_not_before(&Asn1Time::days_from_now(0).unwrap())?;
         builder.set_not_after(&Asn1Time::days_from_now(1).unwrap())?;
@@ -62,7 +65,7 @@ impl Inspire {
         let identifier = SubjectKeyIdentifier::new();
         let identifier = identifier.build(&builder.x509v3_context(None, None))?;
         builder.append_extension(identifier)?;
-        builder.sign(&pkey, openssl::hash::MessageDigest::null())?;
+        builder.sign(&pkey, MessageDigest::null())?;
         let ca = builder.build();
         Ok(Self { ca, pkey })
     }
@@ -153,9 +156,7 @@ impl SpiffeWorkloadApi for Inspire {
                 .unwrap();
             builder.append_extension(auth_identifier).unwrap();
 
-            builder
-                .sign(&self.pkey, openssl::hash::MessageDigest::null())
-                .unwrap();
+            builder.sign(&self.pkey, MessageDigest::null()).unwrap();
             let cert = builder.build();
             svids.push(X509svid {
                 spiffe_id: spiffe_id.clone(),
