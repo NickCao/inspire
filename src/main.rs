@@ -1,3 +1,4 @@
+use argh::FromArgs;
 use tokio::net::UnixListener;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::wrappers::UnixListenerStream;
@@ -10,8 +11,16 @@ pub mod workloadapi {
     tonic::include_proto!("_");
 }
 
-pub struct Inspire {
-    pub ca: rcgen::Certificate,
+#[derive(FromArgs, Clone)]
+/// A partial implementation of the SPIFFE Workload API
+struct Args {
+    /// path to listen on (default: /tmp/inspire)
+    #[argh(option, short = 'l', default = "String::from(\"/tmp/inspire\")")]
+    listen: String,
+}
+
+struct Inspire {
+    ca: rcgen::Certificate,
 }
 
 impl Default for Inspire {
@@ -111,7 +120,9 @@ impl SpiffeWorkloadApi for Inspire {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let uds = UnixListener::bind("inspire")?;
+    let args: Args = argh::from_env();
+    drop(std::fs::remove_file(&args.listen));
+    let uds = UnixListener::bind(&args.listen)?;
     let uds_stream = UnixListenerStream::new(uds);
     let inspire = Inspire::default();
     Server::builder()

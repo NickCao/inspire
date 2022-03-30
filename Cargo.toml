@@ -12,6 +12,7 @@ tokio-stream = { version = "0.1", features = ["net"]}
 rcgen = { git = "https://github.com/NickCao/rcgen" }
 procfs = "0.12.0"
 url = "2.2.2"
+argh = "0.1.7"
 
 [build-dependencies]
 tonic-build = { git = "https://github.com/hyperium/tonic" }
