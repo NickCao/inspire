@@ -30,8 +30,8 @@ impl Default for Inspire {
         let mut builder = openssl::x509::X509::builder().unwrap();
         builder.set_version(2).unwrap();
         let mut name = openssl::x509::X509Name::builder().unwrap();
-        name.append_entry_by_text("CN", "inspire").unwrap();
-        // TODO: cameup with a better name
+        name.append_entry_by_text("O", "SPIFFE").unwrap();
+        name.append_entry_by_text("CN", "ca").unwrap();
         let name = name.build();
         builder.set_issuer_name(&name).unwrap();
         builder.set_subject_name(&name).unwrap();
@@ -110,8 +110,8 @@ impl SpiffeWorkloadApi for Inspire {
             let mut builder = openssl::x509::X509::builder().unwrap();
             builder.set_version(2).unwrap();
             let mut name = openssl::x509::X509Name::builder().unwrap();
-            // TODO: cameup with a better name
-            name.append_entry_by_text("CN", "inspire workload").unwrap();
+            name.append_entry_by_text("O", "SPIFFE").unwrap();
+            name.append_entry_by_text("CN", "workload").unwrap();
             let name = name.build();
             builder.set_issuer_name(self.ca.subject_name()).unwrap();
             builder.set_subject_name(&name).unwrap();
