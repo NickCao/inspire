@@ -36,11 +36,11 @@ impl Default for Inspire {
         builder.set_issuer_name(&name).unwrap();
         builder.set_subject_name(&name).unwrap();
         // TODO: generate random serial number
+        let mut bn = openssl::bn::BigNum::new().unwrap();
+        bn.rand(127, openssl::bn::MsbOption::MAYBE_ZERO, false)
+            .unwrap();
         builder
-            .set_serial_number(
-                &openssl::asn1::Asn1Integer::from_bn(&openssl::bn::BigNum::from_u32(1).unwrap())
-                    .unwrap(),
-            )
+            .set_serial_number(&openssl::asn1::Asn1Integer::from_bn(&bn).unwrap())
             .unwrap();
         builder
             .set_not_before(&openssl::asn1::Asn1Time::days_from_now(0).unwrap())
@@ -115,14 +115,11 @@ impl SpiffeWorkloadApi for Inspire {
             let name = name.build();
             builder.set_issuer_name(self.ca.subject_name()).unwrap();
             builder.set_subject_name(&name).unwrap();
-            // TODO: generate random serial number
+            let mut bn = openssl::bn::BigNum::new().unwrap();
+            bn.rand(127, openssl::bn::MsbOption::MAYBE_ZERO, false)
+                .unwrap();
             builder
-                .set_serial_number(
-                    &openssl::asn1::Asn1Integer::from_bn(
-                        &openssl::bn::BigNum::from_u32(1).unwrap(),
-                    )
-                    .unwrap(),
-                )
+                .set_serial_number(&openssl::asn1::Asn1Integer::from_bn(&bn).unwrap())
                 .unwrap();
             builder
                 .set_not_before(&openssl::asn1::Asn1Time::days_from_now(0).unwrap())
