@@ -10,8 +10,19 @@ pub mod workloadapi {
     tonic::include_proto!("_");
 }
 
-#[derive(Debug, Default)]
-pub struct Inspire {}
+pub struct Inspire {
+    pub ca: rcgen::Certificate,
+}
+
+impl Default for Inspire {
+    fn default() -> Self {
+        let mut params = rcgen::CertificateParams::default();
+        params.alg = &rcgen::PKCS_ED25519;
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Constrained(0));
+        let ca = rcgen::Certificate::from_params(params).unwrap();
+        Self { ca }
+    }
+}
 
 #[tonic::async_trait]
 impl SpiffeWorkloadApi for Inspire {
@@ -31,14 +42,34 @@ impl SpiffeWorkloadApi for Inspire {
             .ok_or(Status::aborted("failed to get peer cred"))?;
         println!("{:?}", cred);
         let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let spiffe_id = "spiffe://example.com/foo".to_string();
+        let ca_der = self.ca.serialize_der().unwrap();
+        let mut params = rcgen::CertificateParams::default();
+        params.alg = &rcgen::PKCS_ED25519;
+        params
+            .subject_alt_names
+            .push(rcgen::SanType::URI(spiffe_id.clone()));
+        let cert = rcgen::Certificate::from_params(params).unwrap();
+        let der = cert.serialize_der_with_signer(&self.ca).unwrap();
         tokio::spawn(async move {
             loop {
-                tx.send(Ok(X509svidResponse {
-                    crl: vec![],
-                    federated_bundles: std::collections::HashMap::new(),
-                    svids: vec![],
-                }))
-                .await;
+                if let Err(_) = tx
+                    .send(Ok(X509svidResponse {
+                        crl: vec![],
+                        federated_bundles: std::collections::HashMap::new(),
+                        svids: vec![X509svid {
+                            spiffe_id: spiffe_id.clone(),
+                            x509_svid: der.clone(),
+                            x509_svid_key: cert.serialize_private_key_der(),
+                            bundle: ca_der.clone(),
+                            hint: "local".to_string(),
+                        }],
+                    }))
+                    .await
+                {
+                    return;
+                }
+                tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
             }
         });
         Ok(Response::new(ReceiverStream::new(rx)))
