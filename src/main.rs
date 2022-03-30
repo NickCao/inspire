@@ -1,4 +1,5 @@
 use argh::FromArgs;
+use openssl::x509::extension::*;
 use openssl::asn1::*;
 use tokio::net::UnixListener;
 use tokio_stream::wrappers::ReceiverStream;
@@ -49,23 +50,23 @@ impl Default for Inspire {
             .set_not_after(&Asn1Time::days_from_now(1).unwrap())
             .unwrap();
         builder.set_pubkey(&pkey).unwrap();
-        let mut san = openssl::x509::extension::SubjectAlternativeName::new();
+        let mut san = SubjectAlternativeName::new();
         san.critical();
         san.uri("spiffe://localhost");
         let san = san.build(&builder.x509v3_context(None, None)).unwrap();
         builder.append_extension(san).unwrap();
-        let mut usage = openssl::x509::extension::KeyUsage::new();
+        let mut usage = KeyUsage::new();
         usage.critical();
         usage.key_cert_sign();
         usage.crl_sign();
         let usage = usage.build().unwrap();
         builder.append_extension(usage).unwrap();
-        let mut basic = openssl::x509::extension::BasicConstraints::new();
+        let mut basic = BasicConstraints::new();
         basic.critical();
         basic.ca();
         let basic = basic.build().unwrap();
         builder.append_extension(basic).unwrap();
-        let identifier = openssl::x509::extension::SubjectKeyIdentifier::new();
+        let identifier = SubjectKeyIdentifier::new();
         let identifier = identifier
             .build(&builder.x509v3_context(None, None))
             .unwrap();
@@ -128,35 +129,35 @@ impl SpiffeWorkloadApi for Inspire {
                 .set_not_after(&Asn1Time::days_from_now(1).unwrap())
                 .unwrap();
             builder.set_pubkey(&pkey).unwrap();
-            let mut san = openssl::x509::extension::SubjectAlternativeName::new();
+            let mut san = SubjectAlternativeName::new();
             san.critical();
             san.uri(&spiffe_id);
             let san = san
                 .build(&builder.x509v3_context(Some(&self.ca), None))
                 .unwrap();
             builder.append_extension(san).unwrap();
-            let mut usage = openssl::x509::extension::KeyUsage::new();
+            let mut usage = KeyUsage::new();
             usage.critical();
             usage.digital_signature();
             let usage = usage.build().unwrap();
             builder.append_extension(usage).unwrap();
-            let mut ext_usage = openssl::x509::extension::ExtendedKeyUsage::new();
+            let mut ext_usage = ExtendedKeyUsage::new();
             ext_usage.critical();
             ext_usage.server_auth();
             ext_usage.client_auth();
             let ext_usage = ext_usage.build().unwrap();
             builder.append_extension(ext_usage).unwrap();
-            let mut basic = openssl::x509::extension::BasicConstraints::new();
+            let mut basic = BasicConstraints::new();
             basic.critical();
             let basic = basic.build().unwrap();
             builder.append_extension(basic).unwrap();
-            let identifier = openssl::x509::extension::SubjectKeyIdentifier::new();
+            let identifier = SubjectKeyIdentifier::new();
             let identifier = identifier
                 .build(&builder.x509v3_context(None, None))
                 .unwrap();
             builder.append_extension(identifier).unwrap();
 
-            let mut auth_identifier = openssl::x509::extension::AuthorityKeyIdentifier::new();
+            let mut auth_identifier = AuthorityKeyIdentifier::new();
             auth_identifier.keyid(true);
             let auth_identifier = auth_identifier
                 .build(&builder.x509v3_context(Some(&self.ca), None))
