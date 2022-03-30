@@ -1,4 +1,5 @@
 use argh::FromArgs;
+use openssl::asn1::*;
 use tokio::net::UnixListener;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::wrappers::UnixListenerStream;
@@ -35,18 +36,17 @@ impl Default for Inspire {
         let name = name.build();
         builder.set_issuer_name(&name).unwrap();
         builder.set_subject_name(&name).unwrap();
-        // TODO: generate random serial number
         let mut bn = openssl::bn::BigNum::new().unwrap();
         bn.rand(127, openssl::bn::MsbOption::MAYBE_ZERO, false)
             .unwrap();
         builder
-            .set_serial_number(&openssl::asn1::Asn1Integer::from_bn(&bn).unwrap())
+            .set_serial_number(&Asn1Integer::from_bn(&bn).unwrap())
             .unwrap();
         builder
-            .set_not_before(&openssl::asn1::Asn1Time::days_from_now(0).unwrap())
+            .set_not_before(&Asn1Time::days_from_now(0).unwrap())
             .unwrap();
         builder
-            .set_not_after(&openssl::asn1::Asn1Time::days_from_now(1).unwrap())
+            .set_not_after(&Asn1Time::days_from_now(1).unwrap())
             .unwrap();
         builder.set_pubkey(&pkey).unwrap();
         let mut san = openssl::x509::extension::SubjectAlternativeName::new();
@@ -119,13 +119,13 @@ impl SpiffeWorkloadApi for Inspire {
             bn.rand(127, openssl::bn::MsbOption::MAYBE_ZERO, false)
                 .unwrap();
             builder
-                .set_serial_number(&openssl::asn1::Asn1Integer::from_bn(&bn).unwrap())
+                .set_serial_number(&Asn1Integer::from_bn(&bn).unwrap())
                 .unwrap();
             builder
-                .set_not_before(&openssl::asn1::Asn1Time::days_from_now(0).unwrap())
+                .set_not_before(&Asn1Time::days_from_now(0).unwrap())
                 .unwrap();
             builder
-                .set_not_after(&openssl::asn1::Asn1Time::days_from_now(1).unwrap())
+                .set_not_after(&Asn1Time::days_from_now(1).unwrap())
                 .unwrap();
             builder.set_pubkey(&pkey).unwrap();
             let mut san = openssl::x509::extension::SubjectAlternativeName::new();
