@@ -2,6 +2,7 @@ use argh::FromArgs;
 use openssl::asn1::*;
 use openssl::bn::*;
 use openssl::hash::*;
+use openssl::pkey::*;
 use openssl::x509::extension::*;
 use openssl::x509::*;
 use tokio::net::UnixListener;
@@ -26,12 +27,12 @@ struct Args {
 
 struct Inspire {
     ca: X509,
-    pkey: openssl::pkey::PKey<openssl::pkey::Private>,
+    pkey: PKey<Private>,
 }
 
 impl Inspire {
     fn new() -> Result<Self, openssl::error::ErrorStack> {
-        let pkey = openssl::pkey::PKey::generate_ed25519()?;
+        let pkey = PKey::generate_ed25519()?;
         let mut builder = X509::builder()?;
         builder.set_version(2)?;
         let mut name = X509Name::builder()?;
@@ -99,18 +100,17 @@ impl SpiffeWorkloadApi for Inspire {
                 .unwrap()
                 .into();
 
-            let pkey = openssl::pkey::PKey::generate_ed25519().unwrap();
-            let mut builder = openssl::x509::X509::builder().unwrap();
+            let pkey = PKey::generate_ed25519().unwrap();
+            let mut builder = X509::builder().unwrap();
             builder.set_version(2).unwrap();
-            let mut name = openssl::x509::X509Name::builder().unwrap();
+            let mut name = X509Name::builder().unwrap();
             name.append_entry_by_text("O", "SPIFFE").unwrap();
             name.append_entry_by_text("CN", "workload").unwrap();
             let name = name.build();
             builder.set_issuer_name(self.ca.subject_name()).unwrap();
             builder.set_subject_name(&name).unwrap();
-            let mut bn = openssl::bn::BigNum::new().unwrap();
-            bn.rand(127, openssl::bn::MsbOption::MAYBE_ZERO, false)
-                .unwrap();
+            let mut bn = BigNum::new().unwrap();
+            bn.rand(127, MsbOption::MAYBE_ZERO, false).unwrap();
             builder
                 .set_serial_number(&Asn1Integer::from_bn(&bn).unwrap())
                 .unwrap();
