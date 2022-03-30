@@ -132,16 +132,19 @@ impl SpiffeWorkloadApi for Inspire {
         &self,
         request: Request<X509svidRequest>,
     ) -> Result<Response<Self::FetchX509SVIDStream>, Status> {
-        let conn_info = request
+        let pid = request
             .extensions()
             .get::<UdsConnectInfo>()
-            .ok_or(Status::aborted("failed to get coonnection info"))?;
-        let cred = conn_info
+            .ok_or(Status::aborted("failed to get conn info"))?
             .peer_cred
-            .ok_or(Status::aborted("failed to get peer cred"))?;
-        let (tx, rx) = tokio::sync::mpsc::channel(1);
-        let proc = procfs::process::Process::new(cred.pid().unwrap()).unwrap();
-        let cgroups = proc.cgroups().unwrap();
+            .ok_or(Status::aborted("failed to get peer cred"))?
+            .pid()
+            .ok_or(Status::aborted("failed to get pid"))?;
+        let cgroups = procfs::process::Process::new(pid)
+            .or(Err(Status::aborted("failed to lookup process")))?
+            .cgroups()
+            .or(Err(Status::aborted("failed to lookup cgroups")))?;
+
         let mut svids = vec![];
         for cgroup in cgroups {
             // TODO: rework handling of path
@@ -159,6 +162,8 @@ impl SpiffeWorkloadApi for Inspire {
                 hint: "local".to_string(),
             });
         }
+
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
         tokio::spawn(async move {
             loop {
                 if let Err(_) = tx
