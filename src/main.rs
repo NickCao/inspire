@@ -58,8 +58,12 @@ impl SpiffeWorkloadApi for Inspire {
         let ca_der = self.ca.serialize_der().unwrap();
         let mut svids = vec![];
         for cgroup in cgroups {
-            let trust_domain = url::Url::parse("spiffe://localhost/cgroup").unwrap();
-            let spiffe_id: String = trust_domain.join(&cgroup.pathname).unwrap().into();
+            // TODO: rework handling of path
+            let spiffe_id: String = url::Url::parse("spiffe://localhost/cgroup/")
+                .unwrap()
+                .join(cgroup.pathname.strip_prefix("/").unwrap())
+                .unwrap()
+                .into();
             let mut params = rcgen::CertificateParams::default();
             params.alg = &rcgen::PKCS_ED25519;
             params
