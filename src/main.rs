@@ -1,6 +1,7 @@
 use argh::FromArgs;
 use openssl::asn1::*;
 use openssl::bn::*;
+use openssl::error::ErrorStack;
 use openssl::hash::*;
 use openssl::pkey::*;
 use openssl::x509::extension::*;
@@ -31,7 +32,7 @@ struct Inspire {
 }
 
 impl Inspire {
-    fn new() -> Result<Self, openssl::error::ErrorStack> {
+    fn new() -> Result<Self, ErrorStack> {
         let pkey = PKey::generate_ed25519()?;
         let mut builder = X509::builder()?;
         builder.set_version(2)?;
@@ -43,9 +44,10 @@ impl Inspire {
         builder.set_subject_name(&name)?;
         let mut bn = BigNum::new()?;
         bn.rand(127, MsbOption::MAYBE_ZERO, false)?;
-        builder.set_serial_number(&Asn1Integer::from_bn(&bn).unwrap())?;
-        builder.set_not_before(&Asn1Time::days_from_now(0).unwrap())?;
-        builder.set_not_after(&Asn1Time::days_from_now(1).unwrap())?;
+        // TODO: proper expiration time
+        builder.set_serial_number(Asn1Integer::from_bn(&bn)?.as_ref())?;
+        builder.set_not_before(Asn1Time::days_from_now(0)?.as_ref())?;
+        builder.set_not_after(Asn1Time::days_from_now(1)?.as_ref())?;
         builder.set_pubkey(&pkey)?;
         let mut san = SubjectAlternativeName::new();
         san.critical();
@@ -69,6 +71,55 @@ impl Inspire {
         builder.sign(&pkey, MessageDigest::null())?;
         let ca = builder.build();
         Ok(Self { ca, pkey })
+    }
+    fn issue(&self, spiffe_id: &str) -> Result<(X509, PKey<Private>), ErrorStack> {
+        let pkey = PKey::generate_ed25519()?;
+        let mut builder = X509::builder()?;
+        builder.set_version(2)?;
+        let mut name = X509Name::builder()?;
+        name.append_entry_by_text("O", "SPIFFE")?;
+        name.append_entry_by_text("CN", "workload")?;
+        let name = name.build();
+        builder.set_issuer_name(self.ca.subject_name())?;
+        builder.set_subject_name(&name)?;
+        let mut bn = BigNum::new()?;
+        bn.rand(127, MsbOption::MAYBE_ZERO, false)?;
+        // TODO: proper expiration time
+        builder.set_serial_number(Asn1Integer::from_bn(&bn)?.as_ref())?;
+        builder.set_not_before(Asn1Time::days_from_now(0)?.as_ref())?;
+        builder.set_not_after(Asn1Time::days_from_now(1)?.as_ref())?;
+        builder.set_pubkey(&pkey)?;
+        let mut san = SubjectAlternativeName::new();
+        san.critical();
+        san.uri(spiffe_id);
+        let san = san.build(&builder.x509v3_context(Some(&self.ca), None))?;
+        builder.append_extension(san)?;
+        let mut usage = KeyUsage::new();
+        usage.critical();
+        usage.digital_signature();
+        let usage = usage.build()?;
+        builder.append_extension(usage)?;
+        let mut ext_usage = ExtendedKeyUsage::new();
+        ext_usage.critical();
+        ext_usage.server_auth();
+        ext_usage.client_auth();
+        let ext_usage = ext_usage.build()?;
+        builder.append_extension(ext_usage)?;
+        let mut basic = BasicConstraints::new();
+        basic.critical();
+        let basic = basic.build()?;
+        builder.append_extension(basic)?;
+        let identifier = SubjectKeyIdentifier::new();
+        let identifier = identifier.build(&builder.x509v3_context(None, None))?;
+        builder.append_extension(identifier)?;
+        let mut auth_identifier = AuthorityKeyIdentifier::new();
+        auth_identifier.keyid(true);
+        let auth_identifier =
+            auth_identifier.build(&builder.x509v3_context(Some(&self.ca), None))?;
+        builder.append_extension(auth_identifier)?;
+        builder.sign(&self.pkey, MessageDigest::null())?;
+        let cert = builder.build();
+        Ok((cert, pkey))
     }
 }
 
@@ -99,65 +150,7 @@ impl SpiffeWorkloadApi for Inspire {
                 .join(cgroup.pathname.strip_prefix("/").unwrap())
                 .unwrap()
                 .into();
-
-            let pkey = PKey::generate_ed25519().unwrap();
-            let mut builder = X509::builder().unwrap();
-            builder.set_version(2).unwrap();
-            let mut name = X509Name::builder().unwrap();
-            name.append_entry_by_text("O", "SPIFFE").unwrap();
-            name.append_entry_by_text("CN", "workload").unwrap();
-            let name = name.build();
-            builder.set_issuer_name(self.ca.subject_name()).unwrap();
-            builder.set_subject_name(&name).unwrap();
-            let mut bn = BigNum::new().unwrap();
-            bn.rand(127, MsbOption::MAYBE_ZERO, false).unwrap();
-            builder
-                .set_serial_number(&Asn1Integer::from_bn(&bn).unwrap())
-                .unwrap();
-            builder
-                .set_not_before(&Asn1Time::days_from_now(0).unwrap())
-                .unwrap();
-            builder
-                .set_not_after(&Asn1Time::days_from_now(1).unwrap())
-                .unwrap();
-            builder.set_pubkey(&pkey).unwrap();
-            let mut san = SubjectAlternativeName::new();
-            san.critical();
-            san.uri(&spiffe_id);
-            let san = san
-                .build(&builder.x509v3_context(Some(&self.ca), None))
-                .unwrap();
-            builder.append_extension(san).unwrap();
-            let mut usage = KeyUsage::new();
-            usage.critical();
-            usage.digital_signature();
-            let usage = usage.build().unwrap();
-            builder.append_extension(usage).unwrap();
-            let mut ext_usage = ExtendedKeyUsage::new();
-            ext_usage.critical();
-            ext_usage.server_auth();
-            ext_usage.client_auth();
-            let ext_usage = ext_usage.build().unwrap();
-            builder.append_extension(ext_usage).unwrap();
-            let mut basic = BasicConstraints::new();
-            basic.critical();
-            let basic = basic.build().unwrap();
-            builder.append_extension(basic).unwrap();
-            let identifier = SubjectKeyIdentifier::new();
-            let identifier = identifier
-                .build(&builder.x509v3_context(None, None))
-                .unwrap();
-            builder.append_extension(identifier).unwrap();
-
-            let mut auth_identifier = AuthorityKeyIdentifier::new();
-            auth_identifier.keyid(true);
-            let auth_identifier = auth_identifier
-                .build(&builder.x509v3_context(Some(&self.ca), None))
-                .unwrap();
-            builder.append_extension(auth_identifier).unwrap();
-
-            builder.sign(&self.pkey, MessageDigest::null()).unwrap();
-            let cert = builder.build();
+            let (cert, pkey) = self.issue(&spiffe_id).unwrap();
             svids.push(X509svid {
                 spiffe_id: spiffe_id.clone(),
                 x509_svid: cert.to_der().unwrap(),
