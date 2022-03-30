@@ -18,6 +18,9 @@ impl Default for Inspire {
     fn default() -> Self {
         let mut params = rcgen::CertificateParams::default();
         params.alg = &rcgen::PKCS_ED25519;
+        params
+            .subject_alt_names
+            .push(rcgen::SanType::URI("spiffe://localhost".to_string()));
         params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Constrained(0));
         let ca = rcgen::Certificate::from_params(params).unwrap();
         Self { ca }
@@ -46,7 +49,7 @@ impl SpiffeWorkloadApi for Inspire {
         let ca_der = self.ca.serialize_der().unwrap();
         let mut svids = vec![];
         for cgroup in cgroups {
-            let trust_domain = url::Url::parse("spiffe://localhost").unwrap();
+            let trust_domain = url::Url::parse("spiffe://localhost/cgroup").unwrap();
             let spiffe_id: String = trust_domain.join(&cgroup.pathname).unwrap().into();
             let mut params = rcgen::CertificateParams::default();
             params.alg = &rcgen::PKCS_ED25519;
