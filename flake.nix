@@ -10,7 +10,7 @@
         in
         {
           devShell = pkgs.mkShell {
-            nativeBuildInputs = with pkgs;[ cargo rustc rustfmt protobuf ];
+            nativeBuildInputs = with pkgs;[ cargo rustc rustfmt protobuf pkg-config openssl ];
           };
         }
       );

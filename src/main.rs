@@ -1,4 +1,5 @@
 use argh::FromArgs;
+use std::io::Write;
 use tokio::net::UnixListener;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::wrappers::UnixListenerStream;
@@ -20,19 +21,60 @@ struct Args {
 }
 
 struct Inspire {
-    ca: rcgen::Certificate,
+    ca: openssl::x509::X509,
+    pkey: openssl::pkey::PKey<openssl::pkey::Private>,
 }
 
 impl Default for Inspire {
     fn default() -> Self {
-        let mut params = rcgen::CertificateParams::default();
-        params.alg = &rcgen::PKCS_ED25519;
-        params
-            .subject_alt_names
-            .push(rcgen::SanType::URI("spiffe://localhost".to_string()));
-        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Constrained(0));
-        let ca = rcgen::Certificate::from_params(params).unwrap();
-        Self { ca }
+        let pkey = openssl::pkey::PKey::generate_ed25519().unwrap();
+        let mut builder = openssl::x509::X509::builder().unwrap();
+        builder.set_version(2).unwrap();
+        let mut name = openssl::x509::X509Name::builder().unwrap();
+        name.append_entry_by_text("CN", "inspire").unwrap();
+        // TODO: cameup with a better name
+        let name = name.build();
+        builder.set_issuer_name(&name).unwrap();
+        builder.set_subject_name(&name).unwrap();
+        // TODO: generate random serial number
+        builder
+            .set_serial_number(
+                &openssl::asn1::Asn1Integer::from_bn(&openssl::bn::BigNum::from_u32(1).unwrap())
+                    .unwrap(),
+            )
+            .unwrap();
+        builder
+            .set_not_before(&openssl::asn1::Asn1Time::days_from_now(0).unwrap())
+            .unwrap();
+        builder
+            .set_not_after(&openssl::asn1::Asn1Time::days_from_now(1).unwrap())
+            .unwrap();
+        builder.set_pubkey(&pkey).unwrap();
+        let mut san = openssl::x509::extension::SubjectAlternativeName::new();
+        san.critical();
+        san.uri("spiffe://localhost");
+        let san = san.build(&builder.x509v3_context(None, None)).unwrap();
+        builder.append_extension(san).unwrap();
+        let mut usage = openssl::x509::extension::KeyUsage::new();
+        usage.critical();
+        usage.key_cert_sign();
+        usage.crl_sign();
+        let usage = usage.build().unwrap();
+        builder.append_extension(usage).unwrap();
+        let mut basic = openssl::x509::extension::BasicConstraints::new();
+        basic.ca();
+        let basic = basic.build().unwrap();
+        builder.append_extension(basic).unwrap();
+        let identifier = openssl::x509::extension::SubjectKeyIdentifier::new();
+        let identifier = identifier
+            .build(&builder.x509v3_context(None, None))
+            .unwrap();
+        builder.append_extension(identifier).unwrap();
+        builder
+            .sign(&pkey, openssl::hash::MessageDigest::null())
+            .unwrap();
+        let ca = builder.build();
+        Self { ca, pkey }
     }
 }
 
@@ -55,7 +97,6 @@ impl SpiffeWorkloadApi for Inspire {
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         let proc = procfs::process::Process::new(cred.pid().unwrap()).unwrap();
         let cgroups = proc.cgroups().unwrap();
-        let ca_der = self.ca.serialize_der().unwrap();
         let mut svids = vec![];
         for cgroup in cgroups {
             // TODO: rework handling of path
@@ -64,18 +105,65 @@ impl SpiffeWorkloadApi for Inspire {
                 .join(cgroup.pathname.strip_prefix("/").unwrap())
                 .unwrap()
                 .into();
-            let mut params = rcgen::CertificateParams::default();
-            params.alg = &rcgen::PKCS_ED25519;
-            params
-                .subject_alt_names
-                .push(rcgen::SanType::URI(spiffe_id.clone()));
-            let cert = rcgen::Certificate::from_params(params).unwrap();
-            let der = cert.serialize_der_with_signer(&self.ca).unwrap();
+
+            let pkey = openssl::pkey::PKey::generate_ed25519().unwrap();
+            let mut builder = openssl::x509::X509::builder().unwrap();
+            builder.set_version(2).unwrap();
+            let mut name = openssl::x509::X509Name::builder().unwrap();
+            // TODO: cameup with a better name
+            name.append_entry_by_text("CN", "inspire workload").unwrap();
+            let name = name.build();
+            builder.set_issuer_name(self.ca.subject_name()).unwrap();
+            builder.set_subject_name(&name).unwrap();
+            // TODO: generate random serial number
+            builder
+                .set_serial_number(
+                    &openssl::asn1::Asn1Integer::from_bn(
+                        &openssl::bn::BigNum::from_u32(1).unwrap(),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            builder
+                .set_not_before(&openssl::asn1::Asn1Time::days_from_now(0).unwrap())
+                .unwrap();
+            builder
+                .set_not_after(&openssl::asn1::Asn1Time::days_from_now(1).unwrap())
+                .unwrap();
+            builder.set_pubkey(&pkey).unwrap();
+            let mut san = openssl::x509::extension::SubjectAlternativeName::new();
+            san.critical();
+            san.uri(&spiffe_id);
+            let san = san.build(&builder.x509v3_context(None, None)).unwrap();
+            builder.append_extension(san).unwrap();
+            let mut usage = openssl::x509::extension::KeyUsage::new();
+            usage.critical();
+            usage.digital_signature();
+            let usage = usage.build().unwrap();
+            builder.append_extension(usage).unwrap();
+            let mut ext_usage = openssl::x509::extension::ExtendedKeyUsage::new();
+            ext_usage.critical();
+            ext_usage.server_auth();
+            ext_usage.client_auth();
+            let ext_usage = ext_usage.build().unwrap();
+            builder.append_extension(ext_usage).unwrap();
+            let mut basic = openssl::x509::extension::BasicConstraints::new();
+            let basic = basic.build().unwrap();
+            builder.append_extension(basic).unwrap();
+            let identifier = openssl::x509::extension::SubjectKeyIdentifier::new();
+            let identifier = identifier
+                .build(&builder.x509v3_context(None, None))
+                .unwrap();
+            builder.append_extension(identifier).unwrap();
+            builder
+                .sign(&self.pkey, openssl::hash::MessageDigest::null())
+                .unwrap();
+            let cert = builder.build();
             svids.push(X509svid {
                 spiffe_id: spiffe_id.clone(),
-                x509_svid: der.clone(),
-                x509_svid_key: cert.serialize_private_key_der(),
-                bundle: ca_der.clone(),
+                x509_svid: cert.to_der().unwrap(),
+                x509_svid_key: pkey.private_key_to_der().unwrap(),
+                bundle: self.ca.to_der().unwrap(),
                 hint: "local".to_string(),
             });
         }
