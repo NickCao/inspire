@@ -13,6 +13,7 @@ openssl = "0.10.38"
 procfs = "0.12.0"
 url = "2.2.2"
 argh = "0.1.7"
+anyhow = "1.0"
 
 [build-dependencies]
 tonic-build = { git = "https://github.com/hyperium/tonic" }

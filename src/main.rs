@@ -1,7 +1,6 @@
 use argh::FromArgs;
 use openssl::asn1::*;
 use openssl::bn::*;
-use openssl::error::ErrorStack;
 use openssl::hash::*;
 use openssl::pkey::*;
 use openssl::x509::extension::*;
@@ -36,8 +35,8 @@ struct Inspire {
 }
 
 impl Inspire {
-    fn new() -> Self {
-        let (tx, watch) = channel([ca().unwrap(), ca().unwrap(), ca().unwrap()]);
+    fn new() -> anyhow::Result<Self> {
+        let (tx, watch) = channel([ca()?, ca()?, ca()?]);
         tokio::spawn(async move {
             loop {
                 let mut bundle = tx.borrow().clone();
@@ -48,11 +47,11 @@ impl Inspire {
                 sleep(Duration::from_secs(ROTATION_INTERVAL)).await;
             }
         });
-        Self { watch }
+        Ok(Self { watch })
     }
 }
 
-fn ca() -> Result<(X509, PKey<Private>), ErrorStack> {
+fn ca() -> anyhow::Result<(X509, PKey<Private>)> {
     let pkey = PKey::generate_ed25519()?;
     let mut builder = X509::builder()?;
     builder.set_version(2)?;
@@ -67,12 +66,11 @@ fn ca() -> Result<(X509, PKey<Private>), ErrorStack> {
     builder.set_serial_number(Asn1Integer::from_bn(&bn)?.as_ref())?;
     builder.set_not_before(Asn1Time::days_from_now(0)?.as_ref())?;
     let not_after = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
+        .duration_since(SystemTime::UNIX_EPOCH)?
         .checked_add(Duration::from_secs(ROTATION_INTERVAL * 3))
-        .unwrap()
+        .ok_or(anyhow::anyhow!("failed to calculate not after"))?
         .as_secs();
-    builder.set_not_after(Asn1Time::from_unix(not_after.try_into().unwrap())?.as_ref())?;
+    builder.set_not_after(Asn1Time::from_unix(not_after.try_into()?)?.as_ref())?;
     builder.set_pubkey(&pkey)?;
     let mut san = SubjectAlternativeName::new();
     san.critical();
@@ -98,7 +96,7 @@ fn ca() -> Result<(X509, PKey<Private>), ErrorStack> {
     Ok((ca, pkey))
 }
 
-fn issue(spiffe_id: &str, bundle: &[(X509, PKey<Private>); 3]) -> Result<X509svid, ErrorStack> {
+fn issue(spiffe_id: &str, bundle: &[(X509, PKey<Private>); 3]) -> anyhow::Result<X509svid> {
     let (ca_cert, ca_pkey) = &bundle[1];
     let pkey = PKey::generate_ed25519()?;
     let mut builder = X509::builder()?;
@@ -241,7 +239,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     drop(std::fs::remove_file(&args.listen));
     let uds = UnixListener::bind(&args.listen)?;
     let uds_stream = UnixListenerStream::new(uds);
-    let inspire = Inspire::new();
+    let inspire = Inspire::new()?;
     Server::builder()
         .add_service(SpiffeWorkloadApiServer::new(inspire))
         .serve_with_incoming(uds_stream)
