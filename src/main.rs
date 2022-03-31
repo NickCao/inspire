@@ -42,7 +42,10 @@ impl Inspire {
                 let mut bundle = tx.borrow().clone();
                 bundle[0] = bundle[1].clone();
                 bundle[1] = bundle[2].clone();
-                bundle[2] = ca().unwrap();
+                match ca() {
+                    Ok(x) => bundle[2] = x,
+                    Err(err) => println!("{}", err),
+                };
                 tx.send_replace(bundle);
                 sleep(Duration::from_secs(ROTATION_INTERVAL)).await;
             }
