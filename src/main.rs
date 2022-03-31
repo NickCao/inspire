@@ -178,31 +178,35 @@ impl SpiffeWorkloadApi for Inspire {
             .or(Err(Status::aborted("failed to lookup process")))?
             .cgroups()
             .or(Err(Status::aborted("failed to lookup cgroups")))?;
-
+        let trust_base = url::Url::parse("spiffe://localhost/cgroup/")
+            .or(Err(Status::aborted("failed to parse trust base")))?;
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         let mut watch = self.watch.clone();
         tokio::spawn(async move {
             while watch.changed().await.is_ok() {
-                let mut svids = vec![];
-                for cgroup in &cgroups {
-                    // TODO: rework handling of path
-                    let spiffe_id: String = url::Url::parse("spiffe://localhost/cgroup/")
-                        .unwrap()
-                        .join(cgroup.pathname.strip_prefix("/").unwrap())
-                        .unwrap()
-                        .into();
-                    let svid = issue(&spiffe_id, &watch.borrow()).unwrap();
-                    svids.push(svid);
-                }
-                if tx
-                    .send(Ok(X509svidResponse {
+                let svids: anyhow::Result<Vec<X509svid>> = (|| {
+                    Ok(cgroups
+                        .iter()
+                        // WARNING: should sanitize cgroup pathname
+                        .map(|cgroup| cgroup.pathname.strip_prefix("/"))
+                        .collect::<Option<Vec<&str>>>()
+                        .ok_or(anyhow::anyhow!("failed to strip prefix from pathname"))?
+                        .iter()
+                        .map(|pathname| trust_base.join(pathname))
+                        .collect::<Result<Vec<url::Url>, _>>()?
+                        .iter()
+                        .map(|id| issue(id.as_str(), &watch.borrow()))
+                        .collect::<Result<Vec<X509svid>, _>>()?)
+                })();
+                let resp = match svids {
+                    Ok(svids) => Ok(X509svidResponse {
                         crl: vec![],
                         federated_bundles: std::collections::HashMap::new(),
                         svids,
-                    }))
-                    .await
-                    .is_err()
-                {
+                    }),
+                    Err(_) => Err(Status::aborted("failed to issue svids")),
+                };
+                if tx.send(resp).await.is_err() {
                     return;
                 }
             }
