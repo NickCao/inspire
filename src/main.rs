@@ -148,7 +148,9 @@ fn issue(spiffe_id: &str, bundle: &[(X509, PKey<Private>); 3]) -> anyhow::Result
         x509_svid_key: pkey.private_key_to_der()?,
         bundle: bundle
             .iter()
-            .map(|(cert, _)| cert.to_der().unwrap())
+            .map(|(cert, _)| cert.to_der())
+            .collect::<Result<Vec<Vec<u8>>, _>>()?
+            .into_iter()
             .flatten()
             .collect(),
         hint: "local".to_owned(),
