@@ -6,6 +6,7 @@ use openssl::hash::*;
 use openssl::pkey::*;
 use openssl::x509::extension::*;
 use openssl::x509::*;
+use std::time::*;
 use tokio::net::UnixListener;
 use tokio::sync::watch::*;
 use tokio::time::*;
@@ -15,6 +16,8 @@ use tonic::transport::server::UdsConnectInfo;
 use tonic::{transport::Server, Request, Response, Status};
 use workloadapi::spiffe_workload_api_server::{SpiffeWorkloadApi, SpiffeWorkloadApiServer};
 use workloadapi::*;
+
+const ROTATION_INTERVAL: u64 = 3600;
 
 pub mod workloadapi {
     tonic::include_proto!("_");
@@ -29,16 +32,20 @@ struct Args {
 }
 
 struct Inspire {
-    watch: Receiver<(X509, PKey<Private>)>,
+    watch: Receiver<[(X509, PKey<Private>); 3]>,
 }
 
 impl Inspire {
     fn new() -> Self {
-        let (tx, watch) = channel(ca().unwrap());
+        let (tx, watch) = channel([ca().unwrap(), ca().unwrap(), ca().unwrap()]);
         tokio::spawn(async move {
             loop {
-                tx.send_replace(ca().unwrap());
-                sleep(Duration::from_millis(10000000)).await;
+                let mut bundle = tx.borrow().clone();
+                bundle[0] = bundle[1].clone();
+                bundle[1] = bundle[2].clone();
+                bundle[2] = ca().unwrap();
+                tx.send_replace(bundle);
+                sleep(Duration::from_secs(ROTATION_INTERVAL)).await;
             }
         });
         Self { watch }
@@ -57,10 +64,15 @@ fn ca() -> Result<(X509, PKey<Private>), ErrorStack> {
     builder.set_subject_name(&name)?;
     let mut bn = BigNum::new()?;
     bn.rand(127, MsbOption::MAYBE_ZERO, false)?;
-    // TODO: proper expiration time
     builder.set_serial_number(Asn1Integer::from_bn(&bn)?.as_ref())?;
     builder.set_not_before(Asn1Time::days_from_now(0)?.as_ref())?;
-    builder.set_not_after(Asn1Time::days_from_now(1)?.as_ref())?;
+    let not_after = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .checked_add(Duration::from_secs(ROTATION_INTERVAL * 3))
+        .unwrap()
+        .as_secs();
+    builder.set_not_after(Asn1Time::from_unix(not_after.try_into().unwrap())?.as_ref())?;
     builder.set_pubkey(&pkey)?;
     let mut san = SubjectAlternativeName::new();
     san.critical();
@@ -86,7 +98,8 @@ fn ca() -> Result<(X509, PKey<Private>), ErrorStack> {
     Ok((ca, pkey))
 }
 
-fn issue(spiffe_id: &str, ca_cert: &X509, ca_pkey: &PKey<Private>) -> Result<X509svid, ErrorStack> {
+fn issue(spiffe_id: &str, bundle: &[(X509, PKey<Private>); 3]) -> Result<X509svid, ErrorStack> {
+    let (ca_cert, ca_pkey) = &bundle[1];
     let pkey = PKey::generate_ed25519()?;
     let mut builder = X509::builder()?;
     builder.set_version(2)?;
@@ -98,10 +111,9 @@ fn issue(spiffe_id: &str, ca_cert: &X509, ca_pkey: &PKey<Private>) -> Result<X50
     builder.set_subject_name(&name)?;
     let mut bn = BigNum::new()?;
     bn.rand(127, MsbOption::MAYBE_ZERO, false)?;
-    // TODO: proper expiration time
     builder.set_serial_number(Asn1Integer::from_bn(&bn)?.as_ref())?;
-    builder.set_not_before(Asn1Time::days_from_now(0)?.as_ref())?;
-    builder.set_not_after(Asn1Time::days_from_now(1)?.as_ref())?;
+    builder.set_not_before(ca_cert.not_before())?;
+    builder.set_not_after(ca_cert.not_after())?;
     builder.set_pubkey(&pkey)?;
     let mut san = SubjectAlternativeName::new();
     san.critical();
@@ -136,7 +148,11 @@ fn issue(spiffe_id: &str, ca_cert: &X509, ca_pkey: &PKey<Private>) -> Result<X50
         spiffe_id: spiffe_id.to_owned(),
         x509_svid: cert.to_der()?,
         x509_svid_key: pkey.private_key_to_der()?,
-        bundle: ca_cert.to_der()?,
+        bundle: bundle
+            .iter()
+            .map(|(cert, _)| cert.to_der().unwrap())
+            .flatten()
+            .collect(),
         hint: "local".to_owned(),
     })
 }
@@ -175,7 +191,7 @@ impl SpiffeWorkloadApi for Inspire {
                         .join(cgroup.pathname.strip_prefix("/").unwrap())
                         .unwrap()
                         .into();
-                    let svid = issue(&spiffe_id, &watch.borrow().0, &watch.borrow().1).unwrap();
+                    let svid = issue(&spiffe_id, &watch.borrow()).unwrap();
                     svids.push(svid);
                 }
                 if tx
