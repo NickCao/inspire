@@ -38,6 +38,7 @@ impl Inspire {
     fn new() -> anyhow::Result<Self> {
         let (tx, watch) = channel([ca()?, ca()?, ca()?]);
         tokio::spawn(async move {
+            let mut interval = interval(Duration::from_secs(ROTATION_INTERVAL));
             loop {
                 let mut bundle = tx.borrow().clone();
                 bundle[0] = bundle[1].clone();
@@ -47,7 +48,7 @@ impl Inspire {
                     Err(err) => println!("{}", err),
                 };
                 tx.send_replace(bundle);
-                sleep(Duration::from_secs(ROTATION_INTERVAL)).await;
+                interval.tick().await;
             }
         });
         Ok(Self { watch })
