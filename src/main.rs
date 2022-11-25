@@ -7,8 +7,6 @@ use openssl::x509::extension::*;
 use openssl::x509::*;
 use std::time::*;
 use tokio::net::UnixListener;
-use tokio::sync::watch::*;
-use tokio::time::*;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::wrappers::UnixListenerStream;
 use tonic::transport::server::UdsConnectInfo;
@@ -31,27 +29,12 @@ struct Args {
 }
 
 struct Inspire {
-    watch: Receiver<[(X509, PKey<Private>); 3]>,
+    ca: (X509, PKey<Private>),
 }
 
 impl Inspire {
     fn new() -> anyhow::Result<Self> {
-        let (tx, watch) = channel([ca()?, ca()?, ca()?]);
-        tokio::spawn(async move {
-            let mut interval = interval(Duration::from_secs(ROTATION_INTERVAL));
-            loop {
-                let mut bundle = tx.borrow().clone();
-                bundle[0] = bundle[1].clone();
-                bundle[1] = bundle[2].clone();
-                match ca() {
-                    Ok(x) => bundle[2] = x,
-                    Err(err) => println!("{}", err),
-                };
-                tx.send_replace(bundle);
-                interval.tick().await;
-            }
-        });
-        Ok(Self { watch })
+        Ok(Self { ca: ca()? })
     }
 }
 
@@ -68,13 +51,8 @@ fn ca() -> anyhow::Result<(X509, PKey<Private>)> {
     let mut bn = BigNum::new()?;
     bn.rand(127, MsbOption::MAYBE_ZERO, false)?;
     builder.set_serial_number(Asn1Integer::from_bn(&bn)?.as_ref())?;
-    builder.set_not_before(Asn1Time::days_from_now(0)?.as_ref())?;
-    let not_after = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)?
-        .checked_add(Duration::from_secs(ROTATION_INTERVAL * 3))
-        .ok_or(anyhow::anyhow!("failed to calculate not after"))?
-        .as_secs();
-    builder.set_not_after(Asn1Time::from_unix(not_after.try_into()?)?.as_ref())?;
+    // see https://www.rfc-editor.org/rfc/rfc5280#section-4.1.2.5
+    builder.set_not_after(Asn1Time::from_str_x509("99991231235959Z")?.as_ref())?;
     builder.set_pubkey(&pkey)?;
     let mut san = SubjectAlternativeName::new();
     san.critical();
@@ -100,8 +78,8 @@ fn ca() -> anyhow::Result<(X509, PKey<Private>)> {
     Ok((ca, pkey))
 }
 
-fn issue(spiffe_id: &str, bundle: &[(X509, PKey<Private>); 3]) -> anyhow::Result<X509svid> {
-    let (ca_cert, ca_pkey) = &bundle[1];
+fn issue(spiffe_id: &str, bundle: &(X509, PKey<Private>)) -> anyhow::Result<X509svid> {
+    let (ca_cert, ca_pkey) = &bundle;
     let pkey = PKey::generate_ed25519()?;
     let mut builder = X509::builder()?;
     builder.set_version(2)?;
@@ -114,8 +92,12 @@ fn issue(spiffe_id: &str, bundle: &[(X509, PKey<Private>); 3]) -> anyhow::Result
     let mut bn = BigNum::new()?;
     bn.rand(127, MsbOption::MAYBE_ZERO, false)?;
     builder.set_serial_number(Asn1Integer::from_bn(&bn)?.as_ref())?;
-    builder.set_not_before(ca_cert.not_before())?;
-    builder.set_not_after(ca_cert.not_after())?;
+    let not_after = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)?
+        .checked_add(Duration::from_secs(ROTATION_INTERVAL * 2))
+        .ok_or(anyhow::anyhow!("failed to calculate not after"))?
+        .as_secs();
+    builder.set_not_after(Asn1Time::from_unix(not_after.try_into()?)?.as_ref())?;
     builder.set_pubkey(&pkey)?;
     let mut san = SubjectAlternativeName::new();
     san.critical();
@@ -150,13 +132,7 @@ fn issue(spiffe_id: &str, bundle: &[(X509, PKey<Private>); 3]) -> anyhow::Result
         spiffe_id: spiffe_id.to_owned(),
         x509_svid: cert.to_der()?,
         x509_svid_key: pkey.private_key_to_der()?,
-        bundle: bundle
-            .iter()
-            .map(|(cert, _)| cert.to_der())
-            .collect::<Result<Vec<Vec<u8>>, _>>()?
-            .into_iter()
-            .flatten()
-            .collect(),
+        bundle: bundle.0.to_der()?,
         hint: "local".to_owned(),
     })
 }
@@ -184,10 +160,11 @@ impl SpiffeWorkloadApi for Inspire {
             .or(Err(Status::aborted("failed to lookup cgroups")))?;
         let trust_base = url::Url::parse("spiffe://localhost/cgroup/")
             .or(Err(Status::aborted("failed to parse trust base")))?;
+        let ca = self.ca.clone();
         let (tx, rx) = tokio::sync::mpsc::channel(1);
-        let mut watch = self.watch.clone();
         tokio::spawn(async move {
-            while watch.changed().await.is_ok() {
+            let mut interval = tokio::time::interval(Duration::from_secs(ROTATION_INTERVAL));
+            loop {
                 let svids: anyhow::Result<Vec<X509svid>> = (|| {
                     Ok(cgroups
                         .iter()
@@ -199,7 +176,7 @@ impl SpiffeWorkloadApi for Inspire {
                         .map(|pathname| trust_base.join(pathname))
                         .collect::<Result<Vec<url::Url>, _>>()?
                         .iter()
-                        .map(|id| issue(id.as_str(), &watch.borrow()))
+                        .map(|id| issue(id.as_str(), &ca))
                         .collect::<Result<Vec<X509svid>, _>>()?)
                 })();
                 let resp = match svids {
@@ -213,6 +190,7 @@ impl SpiffeWorkloadApi for Inspire {
                 if tx.send(resp).await.is_err() {
                     return;
                 }
+                interval.tick().await;
             }
         });
         Ok(Response::new(ReceiverStream::new(rx)))
