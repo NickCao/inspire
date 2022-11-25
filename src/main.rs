@@ -51,8 +51,9 @@ fn ca() -> anyhow::Result<(X509, PKey<Private>)> {
     let mut bn = BigNum::new()?;
     bn.rand(127, MsbOption::MAYBE_ZERO, false)?;
     builder.set_serial_number(Asn1Integer::from_bn(&bn)?.as_ref())?;
+    builder.set_not_before(Asn1Time::days_from_now(0)?.as_ref())?;
     // see https://www.rfc-editor.org/rfc/rfc5280#section-4.1.2.5
-    builder.set_not_after(Asn1Time::from_str_x509("99991231235959Z")?.as_ref())?;
+    builder.set_not_after(Asn1Time::from_str("99991231235959Z")?.as_ref())?;
     builder.set_pubkey(&pkey)?;
     let mut san = SubjectAlternativeName::new();
     san.critical();
@@ -92,6 +93,7 @@ fn issue(spiffe_id: &str, bundle: &(X509, PKey<Private>)) -> anyhow::Result<X509
     let mut bn = BigNum::new()?;
     bn.rand(127, MsbOption::MAYBE_ZERO, false)?;
     builder.set_serial_number(Asn1Integer::from_bn(&bn)?.as_ref())?;
+    builder.set_not_before(Asn1Time::days_from_now(0)?.as_ref())?;
     let not_after = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)?
         .checked_add(Duration::from_secs(ROTATION_INTERVAL * 2))
