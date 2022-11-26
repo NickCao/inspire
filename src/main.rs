@@ -160,7 +160,7 @@ impl SpiffeWorkloadApi for Inspire {
             .or(Err(Status::aborted("failed to lookup process")))?
             .cgroups()
             .or(Err(Status::aborted("failed to lookup cgroups")))?;
-        let trust_base = url::Url::parse("spiffe://localhost/cgroup/")
+        let trust_base = url::Url::parse("spiffe://localhost/")
             .or(Err(Status::aborted("failed to parse trust base")))?;
         let ca = self.ca.clone();
         let (tx, rx) = tokio::sync::mpsc::channel(1);
@@ -171,11 +171,8 @@ impl SpiffeWorkloadApi for Inspire {
                     Ok(cgroups
                         .iter()
                         // WARNING: should sanitize cgroup pathname
-                        .map(|cgroup| cgroup.pathname.strip_prefix("/"))
-                        .collect::<Option<Vec<&str>>>()
-                        .ok_or(anyhow::anyhow!("failed to strip prefix from pathname"))?
-                        .iter()
-                        .map(|pathname| trust_base.join(pathname))
+                        .map(|cgroup| cgroup.pathname.replace("@", "-"))
+                        .map(|pathname| trust_base.join(&pathname))
                         .collect::<Result<Vec<url::Url>, _>>()?
                         .iter()
                         .map(|id| issue(id.as_str(), &ca))
